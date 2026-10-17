@@ -1,0 +1,61 @@
+# Validation of SHCloudPanel 1.3.1
+
+Verified locally on Windows with Node.js 24.19.0:
+
+- 72 passing checks across the application, transfer, runtime and installer suites, including parent tests; no skipped checks.
+- Authentication, cookie flags, CSRF, cross-origin protection and rate limits.
+- Single-owner setup, owner protection, admin/member role boundaries and session revocation.
+- Encrypted upload/decrypted download, private account isolation and blocked path traversal.
+- Quotas, concurrent uploads, folder-cycle prevention, recursive trash/restore and permanent cleanup.
+- Raster previews and attachment-only serving for active content such as SVG.
+- Password recovery and session invalidation.
+- Persistent sessions/files across restart, consistent offline backup and successful restoration.
+- Missing-key refusal and direct HTTP production configuration.
+- JavaScript syntax checks and Bash syntax checks for both shell scripts.
+- Installer menu, bold/color and plain output, and noninteractive preview checked in Git Bash.
+- Preview refuses to invoke mocked installation/network commands.
+- Private-checkout cloning verified with a local Git fixture: committed source only, no environment/data/untracked files or credential configuration copied, correct branch and GitHub origin.
+- Failed repository authentication stops before project setup.
+- Standard `npm install -g pm2` to the global npm prefix, with `/root/.pm2` used consistently for management; checked with command fixtures.
+- Missing PM2 process entries are recreated by Restart without a separate Start menu.
+- PM2 name collisions, including duplicate names, are rejected before modifying another application.
+- Offline repair backup preserves SQLite, encrypted parts, encryption key and the previous environment without migrating the database first.
+- Repair moves a controlled legacy fixture to its new directory, retains its owner/files/key, and marks setup complete after health/startup succeeds.
+- Absolute managed storage paths migrate along with the directory; custom environment settings remain.
+- Broad removal targets, external/overlapping storage and symlinked storage redirects are refused.
+- Y/N uninstall confirmation, default-No cancellation without process changes, repeated uninstall, complete fixture-directory removal, app-only deletion and preservation of other PM2 applications.
+- Partial/duplicate legacy folders, unused runtime/home files and a manager file are removed without Git/package/environment metadata. Cleanup followed by a new installation creates a new SQLite owner and encryption key; old accounts and project backups are absent.
+- Failed deletion is reported and does not claim successful uninstall.
+- Eight-digit owner setup/login and eight-character registration, password change, managed-account creation and terminal recovery; seven-character passwords are rejected and changed/reset sessions are revoked.
+- Linux-style PM2 ESM import with a different `process.argv[1]` starts a real HTTP listener and returns the current healthy version; private temporary storage is used.
+- PM2 configuration reads `.env` explicitly, overriding stale port/origin/storage settings and preserving blank fields that clear old values.
+- Legacy PM2 retirement preserves another app and its startup service. Fetch failure during repair occurs before the running service or existing data is touched.
+- Health checks accept the expected SHCloudPanel status/version and reject older versions, unrelated HTTP 200 responses and unhealthy status.
+- **Actual PM2 7.0.4**, using an isolated Windows daemon, temporary data and a local test port: initial ecosystem start, stopped-process restart, missing-entry recreation, app health and encryption-key persistence passed. App-only deletion plus two saves preserved another isolated process in both `dump.pm2` and `dump.pm2.bak`. The daemon and temporary storage were removed afterward.
+- Updater follows a renamed remote default branch; divergent history is refused before renaming the local branch.
+- Default service port 6969, all available IPv4 interfaces and localhost access without a website hostname.
+- Actual browser login and a 115 MiB + 137 byte upload through the computer's IPv4 address on port 6969.
+- The direct-IP file used five 20 MiB parts and one 15 MiB + 137 byte final part; complete download SHA-256 and a range crossing the part boundary passed.
+- Arbitrary DNS Host headers, incorrect ports, cross-origin writes and missing CSRF tokens remain rejected in direct-IP mode.
+- New default file-size limit 0 (unlimited), legacy cap migration, unchanged account quotas/data/key and optional explicit caps.
+- Upload metadata exceeding the previous 512 MiB and 10 GiB caps accepted when account quota and disk capacity allow.
+- Portable browser resume-record lookup on HTTP IP pages without SubtleCrypto.
+- Installer preview contains port 6969 and no DNS/certificate/network-hosting setup.
+- Updater migrates the old network settings once and preserves unrelated environment fields.
+- Rollback refuses to start version 1.0 against new chunked storage, including pending parts.
+- Chunk setting defaults to 20 MiB and accepts owner-only integer settings from 1–80 MiB.
+- Encrypted sequential chunk assembly, exact byte lengths, safe replay and idempotent creation/completion after lost acknowledgements.
+- Cancellation, expiry, suspended/deleted accounts, filename/folder reservations and concurrent quota/disk reservations.
+- Paused uploads survive restart; missing parts invalidate the session and release its reservation.
+- Authenticated GET/HEAD byte ranges, including cross-part, open-ended and suffix requests, and legacy encrypted files.
+- Tampered encrypted parts fail authentication before requested plaintext is released.
+- Offline backup and restore of encrypted segmented files and key.
+- Browser checks for owner sign-in, folder creation, file upload and nested folder upload.
+- Browser upload of a 115 MiB + 137 byte fixture used six requests: five 20 MiB parts and one 15 MiB + 137 byte part.
+- Native browser download of that fixture matched the original SHA-256 hash.
+- Actual browser pause after one committed part, reload/reselect and explicit resume completed successfully; cancellation discarded pending parts.
+- Light/dark preference persists across reload. Owner chunk setting changed 20 → 4 → 20 MB and persisted after reload.
+- Responsive dashboard and owner settings at desktop (1440px) and mobile (390px); no horizontal overflow observed.
+- No new browser console errors or warnings during the final theme/settings verification.
+
+Not verified on a live Linux VPS: apt/Node installation, Linux file permissions, systemd reboot startup, legacy systemd-unit cleanup and updater rollback against a deployed service. Management workflows used controlled fixtures; actual PM2 commands used an isolated Windows daemon. Browser/theme checks listed above were completed for v1.2; v1.3 changes installation and management. These checks do not constitute a load test or independent security audit. See README for operating limits and deployment requirements.
