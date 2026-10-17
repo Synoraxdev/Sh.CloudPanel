@@ -62,13 +62,18 @@ test('installer preview is noninteractive and does not invoke system commands', 
     bash ./install.sh --dry-run
   `]);
   assert.match(output, /its2jenil_/);
-  assert.match(output, /git clone --branch main https:\/\/github\.com\/its2jenil_\/SHCloudPanel\.git \/root\/shcloudpanel/);
+  assert.match(output, /git clone --branch main https:\/\/github\.com\/Synoraxdev\/Sh\.CloudPanel\.git \/root\/shcloudpanel/);
   assert.match(output, /cd \/root\/shcloudpanel\n/);
   assert.match(output, /npm install -g pm2/);
   assert.match(output, /pm2 startup systemd -u root --hp \/root/);
   assert.match(output, /\[10\/10\] Verify cloud health/);
   assert.match(output, /http:\/\/localhost:6969/);
-  assert.doesNotMatch(output, /Nginx|Certbot|Cloudflare|Configure HTTPS|DNS|6696/);
+  // The preview shows both install methods: tunneling (above) and the DNS method.
+  assert.match(output, /VIA DNS \(NORMAL METHOD, RECOMMENDED\)/);
+  assert.match(output, /\[13\/13\] Verify https:\/\/your-domain/);
+  assert.match(output, /certbot certonly --webroot/);
+  assert.match(output, /127\.0\.0\.1:6969/);
+  assert.doesNotMatch(output, /6696/);
   assert.doesNotMatch(output, /\x1b\[/);
 });
 
@@ -592,4 +597,160 @@ test('repair fetch failure stops before touching the running service or existing
   assert.match(result.stderr,/Your files and owner account are preserved/);
   assert.equal(existsSync(path.join(temporary,'unsafe')),false);
   assert.equal(readFileSync(path.join(temporary,'app','data','existing'),'utf8'),'preserve-me');
+}));
+
+test('install menu offers tunneling and DNS methods and can go back', { skip: !available }, () => {
+  const menu = shell(['-c', "printf '1\\n9\\n0\\n0\\n' | bash ./install.sh"]);
+  assert.match(menu, /INSTALL METHOD/);
+  assert.match(menu, /1\s+Via tunneling/);
+  assert.match(menu, /2\s+Via DNS .*recommended/);
+  assert.match(menu, /Choose 1, 2 or 0\./);
+  assert.match(menu, /See you next time/);
+});
+
+test('domain and email validation accept real names and reject IPs, ports and wildcards', { skip: !available }, () => {
+  shell(['-c', `
+    source ./install.sh
+    bad() { if "$@"; then echo "unexpected pass: $*"; exit 1; fi; }
+    valid_domain cloud.example.com
+    valid_domain a-b.example.co.uk
+    valid_domain xn--80ak6aa92e.xn--p1ai
+    bad valid_domain 1.2.3.4
+    bad valid_domain localhost
+    bad valid_domain '*.example.com'
+    bad valid_domain 'exa mple.com'
+    bad valid_domain example.com:8080
+    bad valid_domain -bad.example.com
+    valid_email admin@example.com
+    bad valid_email not-an-email
+  `]);
+});
+
+test('DNS questions normalise the domain, re-ask invalid input and can be cancelled', { skip: !available }, () => {
+  const output = shell(['-c', `
+    source ./install.sh
+    printf 'bad domain\\nhttps://Cloud.Example.COM/path\\nnot-an-email\\nadmin@example.com\\ny\\n' | { collect_dns_settings; printf 'RESULT=%s|%s\\n' "$DNS_DOMAIN" "$DNS_EMAIL"; }
+    printf '0\\n' | { if collect_dns_settings; then echo ran; else echo cancelled; fi; }
+  `]);
+  assert.match(output, /Enter a valid domain name/);
+  assert.match(output, /Enter a valid email address/);
+  assert.match(output, /RESULT=cloud\.example\.com\|admin@example\.com/);
+  assert.match(output, /^cancelled$/m);
+});
+
+test('nginx site proxies to the local service with HTTPS and the right nginx syntax', { skip: !available }, () => fixture((temporary, env) => {
+  shell(['-c', `
+    source ./install.sh
+    ACME_ROOT=/var/www/shcloudpanel-acme
+    has_ipv6() { return 0; }
+    nginx() { printf 'nginx version: nginx/1.18.0\\n' >&2; }
+    render_nginx_conf full cloud.example.com > "$SHCLOUDPANEL_TEST_ROOT/old.conf"
+    nginx() { printf 'nginx version: nginx/1.26.1\\n' >&2; }
+    render_nginx_conf full cloud.example.com > "$SHCLOUDPANEL_TEST_ROOT/new.conf"
+    render_nginx_conf http cloud.example.com > "$SHCLOUDPANEL_TEST_ROOT/http.conf"
+    has_ipv6() { return 1; }
+    render_nginx_conf full cloud.example.com > "$SHCLOUDPANEL_TEST_ROOT/no-ipv6.conf"
+  `], env);
+  const read = name => readFileSync(path.join(temporary, name), 'utf8');
+  for (const name of ['old.conf', 'new.conf']) {
+    const conf = read(name);
+    assert.match(conf, /^# Managed by SHCloudPanel/);
+    assert.match(conf, /server_name cloud\.example\.com;/);
+    assert.match(conf, /root \/var\/www\/shcloudpanel-acme;/);
+    assert.match(conf, /return 301 https:\/\/\$host\$request_uri;/);
+    assert.match(conf, /ssl_certificate \/etc\/letsencrypt\/live\/cloud\.example\.com\/fullchain\.pem;/);
+    assert.match(conf, /proxy_pass http:\/\/127\.0\.0\.1:6969;/);
+    // The client address is overwritten, never appended, so it cannot be spoofed.
+    assert.match(conf, /proxy_set_header X-Forwarded-For \$remote_addr;/);
+    assert.match(conf, /proxy_set_header X-Forwarded-Proto \$scheme;/);
+    assert.match(conf, /client_max_body_size 128m;/);
+  }
+  assert.match(read('old.conf'), /listen 443 ssl http2;/);
+  assert.match(read('old.conf'), /listen \[::\]:443 ssl http2;/);
+  assert.match(read('old.conf'), /listen \[::\]:80;/);
+  // No IPv6 on the server: nginx must not be asked to open IPv6 sockets.
+  assert.doesNotMatch(read('no-ipv6.conf'), /\[::\]/);
+  assert.match(read('no-ipv6.conf'), /listen 443 ssl;/);
+  assert.doesNotMatch(read('old.conf'), /http2 on;/);
+  assert.match(read('new.conf'), /listen 443 ssl;/);
+  assert.match(read('new.conf'), /http2 on;/);
+  const http = read('http.conf');
+  assert.match(http, /acme-challenge/);
+  assert.doesNotMatch(http, /443|ssl_certificate|proxy_pass/);
+}));
+
+test('DNS environment is local-only HTTPS, survives repair and is shown as the public address', { skip: !available }, () => fixture((temporary, env) => {
+  shell(['-c', `
+    source ./install.sh
+    APP_DIR="$SHCLOUDPANEL_TEST_ROOT/app"; mkdir -p "$APP_DIR"; cd "$APP_DIR"
+    printf 'DATA_DIR=./kept\\nOPERATOR=keep\\n' > .env
+    INSTALL_METHOD=dns; DNS_DOMAIN=cloud.example.com; DNS_EMAIL=admin@example.com
+    configure_environment
+    for line in PORT=6969 HOST=127.0.0.1 APP_URL=https://cloud.example.com TRUST_PROXY=true COOKIE_SECURE=true SHCLOUDPANEL_NETWORK_MODE=dns-v1 LETSENCRYPT_EMAIL=admin@example.com DATA_DIR=./kept OPERATOR=keep; do grep -qx "$line" .env; done
+    dns_mode_enabled
+    # Repair runs without a method: the DNS settings must stay.
+    INSTALL_METHOD=tunnel; DNS_DOMAIN=''; DNS_EMAIL=''
+    configure_environment
+    for line in HOST=127.0.0.1 APP_URL=https://cloud.example.com TRUST_PROXY=true COOKIE_SECURE=true SHCLOUDPANEL_NETWORK_MODE=dns-v1; do grep -qx "$line" .env; done
+    [[ "$(grep -c '^APP_URL=' .env)" == 1 ]]
+    load_dns_from_env
+    [[ "$DNS_DOMAIN" == cloud.example.com && "$DNS_EMAIL" == admin@example.com ]]
+    [[ "$(show_addresses)" == https://cloud.example.com ]]
+  `], env);
+}));
+
+test('updater keeps a DNS installation instead of resetting it to direct port 6969', { skip: !available }, () => fixture((temporary, env) => {
+  shell(['-c', `
+    source ./update.sh
+    APP_DIR="$SHCLOUDPANEL_TEST_ROOT/application"; mkdir -p "$APP_DIR"
+    printf 'PORT=6969\\nHOST=127.0.0.1\\nAPP_URL=https://cloud.example.com\\nTRUST_PROXY=true\\nCOOKIE_SECURE=true\\nSHCLOUDPANEL_NETWORK_MODE=dns-v1\\n' > "$APP_DIR/.env"
+    configure_service_env
+    for line in HOST=127.0.0.1 APP_URL=https://cloud.example.com TRUST_PROXY=true COOKIE_SECURE=true SHCLOUDPANEL_NETWORK_MODE=dns-v1; do grep -qx "$line" "$APP_DIR/.env"; done
+  `], env);
+}));
+
+test('removing a DNS install deletes only the nginx site that SHCloudPanel created', { skip: !available }, () => fixture((temporary, env) => {
+  const output = shell(['-c', `
+    source ./install.sh
+    NGINX_CONF="$SHCLOUDPANEL_TEST_ROOT/conf.d/shcloudpanel.conf"; ACME_ROOT="$SHCLOUDPANEL_TEST_ROOT/www/shcloudpanel-acme"
+    mkdir -p "$SHCLOUDPANEL_TEST_ROOT/conf.d" "$ACME_ROOT"
+    printf '# Managed by SHCloudPanel (its2jenil_).\\nserver {\\n    server_name cloud.example.com;\\n}\\n' > "$NGINX_CONF"
+    nginx() { return 0; }
+    systemctl() { printf 'systemctl %s\\n' "$*" >> "$SHCLOUDPANEL_TEST_ROOT/calls"; }
+    remove_domain_proxy
+    [[ ! -e "$NGINX_CONF" && ! -e "$ACME_ROOT" ]]
+    printf 'server { server_name other.example; }\\n' > "$NGINX_CONF"
+    remove_domain_proxy
+    [[ -f "$NGINX_CONF" ]]
+  `], env);
+  assert.match(output, /Removed the nginx site and certificate for cloud\.example\.com/);
+  assert.match(output, /was not created by SHCloudPanel/);
+  assert.match(readFileSync(path.join(temporary, 'calls'), 'utf8'), /systemctl reload nginx/);
+}));
+
+test('DNS install runs its checks first, then nginx and the certificate after the app is live', { skip: !available }, () => fixture((temporary, env) => {
+  const flow = body => shell(['-c', `
+    source ./install.sh
+    APP_DIR="$SHCLOUDPANEL_TEST_ROOT/app"; LEGACY_DIR="$SHCLOUDPANEL_TEST_ROOT/legacy"
+    rec() { printf '%s\\n' "$*" >> "$SHCLOUDPANEL_TEST_ROOT/order"; }
+    require_root() { :; }
+    for f in check_dns_ports check_nginx_domain_free verify_domain_dns open_log linux_requirements dns_requirements install_node install_pm2 clone_project configure_environment protect_private_files private_permissions ensure_owner enable_startup health nginx_http_site issue_certificate nginx_https_site verify_public_health mark_installed; do eval "$f() { rec $f; }"; done
+    run_command() { rec "run:$*"; }
+    process_state() { printf missing; }
+    pm2() { rec "pm2 $1"; }
+    ${body}
+    INSTALL_METHOD=dns
+    install_project
+  `], env);
+  const order = () => readFileSync(path.join(temporary, 'order'), 'utf8').trim().split('\n');
+  const output = flow(`collect_dns_settings() { rec collect; DNS_DOMAIN=cloud.example.com; }`);
+  assert.deepEqual(order(), ['collect', 'check_dns_ports', 'check_nginx_domain_free', 'verify_domain_dns', 'open_log', 'linux_requirements', 'dns_requirements', 'install_node', 'install_pm2', 'clone_project', 'run:npm ci --omit=dev --ignore-scripts', 'configure_environment', 'protect_private_files', 'private_permissions', 'ensure_owner', 'pm2 start', 'enable_startup', 'health', 'nginx_http_site', 'issue_certificate', 'nginx_https_site', 'verify_public_health', 'mark_installed']);
+  assert.match(output, /\[01\/13\] Install Linux requirements/);
+  assert.match(output, /\[13\/13\] Verify https:\/\/cloud\.example\.com/);
+  assert.match(output, /SHCloudPanel is ready on https:\/\/cloud\.example\.com/);
+  // Cancelling the questions changes nothing.
+  rmSync(path.join(temporary, 'order'));
+  const cancelled = flow(`collect_dns_settings() { rec collect; return 1; }`);
+  assert.deepEqual(order(), ['collect']);
+  assert.match(cancelled, /Installation cancelled\. Nothing was changed\./);
 }));

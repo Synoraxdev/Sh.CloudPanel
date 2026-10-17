@@ -7,7 +7,13 @@ LEGACY_DIR=/opt/shcloudpanel
 LEGACY_HOME=/home/shcloudpanel
 LEGACY_RUNTIME=/opt/shcloudpanel-runtime
 MANAGER_FILE=/root/shcloudpanel-manager.sh
-REPO_URL=https://github.com/its2jenil_/SHCloudPanel.git
+NGINX_CONF=/etc/nginx/conf.d/shcloudpanel.conf
+ACME_ROOT=/var/www/shcloudpanel-acme
+STEP_TOTAL=10
+INSTALL_METHOD=tunnel
+DNS_DOMAIN=''
+DNS_EMAIL=''
+REPO_URL=https://github.com/Synoraxdev/Sh.CloudPanel.git
 REPO_BRANCH=main
 SOURCE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd -P)
 LOG_FILE=/var/log/shcloudpanel-install.log
@@ -21,7 +27,7 @@ heading() { printf '\n%s%s%s%s\n' "$BOLD" "$ACCENT" "$*" "$RESET"; }
 note() { printf '  %s\n' "$*"; }
 success() { printf '  %sOK%s  %s\n' "$GREEN" "$RESET" "$*"; }
 die() { printf '\n%s%sERROR%s  %s\n' "$BOLD" "$RED" "$RESET" "$*" >&2; exit 1; }
-step() { printf '\n%s%s[%02d/10] %s%s\n' "$BOLD" "$ACCENT" "$1" "$2" "$RESET"; }
+step() { printf '\n%s%s[%02d/%s] %s%s\n' "$BOLD" "$ACCENT" "$1" "$STEP_TOTAL" "$2" "$RESET"; }
 require_root() { [[ $EUID -eq 0 ]] || die 'Run as root: sudo bash install.sh'; }
 run_command() {
   if "$@" >>"$LOG_FILE" 2>&1; then return 0; fi
@@ -71,6 +77,28 @@ installation_plan() {
   step 8 'Start SHCloudPanel with PM2'; note 'pm2 start ecosystem.config.cjs --only shcloudpanel'
   step 9 'Enable automatic startup after reboot'; note 'pm2 startup systemd -u root --hp /root; pm2 save'
   step 10 'Verify cloud health'; note 'Open http://localhost:6969 or http://SERVER_IPV4:6969 and sign in.'
+  note 'The plan above is the "Via tunneling" method (direct server address, port 6969).'
+  dns_installation_plan
+}
+dns_installation_plan() {
+  local previous=$STEP_TOTAL
+  STEP_TOTAL=13
+  heading 'INSTALLATION PLAN - VIA DNS (NORMAL METHOD, RECOMMENDED)'
+  note 'You enter a domain (cloud.example.com) whose A record points to this server; Cloudflare or any DNS provider works.'
+  step 1 'Install Linux requirements, nginx and certbot'
+  step 2 'Install Node.js LTS and global PM2'
+  step 3 'Clone SHCloudPanel and enter the project directory'
+  step 4 'Install locked application requirements'; note 'npm ci --omit=dev --ignore-scripts'
+  step 5 'Configure private storage'; note 'The service listens on 127.0.0.1:6969 only; APP_URL=https://your-domain.'
+  step 6 'Create the owner account'; note 'Username, email and a password entered privately.'
+  step 7 'Start SHCloudPanel with PM2'; note 'pm2 start ecosystem.config.cjs --only shcloudpanel'
+  step 8 'Enable automatic startup after reboot'; note 'pm2 startup systemd -u root --hp /root; pm2 save'
+  step 9 'Verify local cloud health'
+  step 10 'Create the nginx site for the domain'; note '/etc/nginx/conf.d/shcloudpanel.conf (other nginx sites are not touched).'
+  step 11 'Issue the free SSL certificate'; note "certbot certonly --webroot (Let's Encrypt, renews automatically)."
+  step 12 'Enable HTTPS and forward to SHCloudPanel'; note 'nginx terminates HTTPS and proxies to 127.0.0.1:6969.'
+  step 13 'Verify https://your-domain'; note 'Open https://your-domain and sign in.'
+  STEP_TOTAL=$previous
 }
 linux_requirements() {
   [[ -f /etc/os-release ]] || die 'Linux OS metadata is missing.'
@@ -131,7 +159,7 @@ clone_project() {
     source_remote=$(git -c safe.directory="$SOURCE_DIR" -C "$SOURCE_DIR" remote get-url origin 2>/dev/null) || source_remote=''
   fi
   case "$source_remote" in
-    "$REPO_URL"|"${REPO_URL%.git}"|git@github.com:its2jenil_/SHCloudPanel.git)
+    "$REPO_URL"|"${REPO_URL%.git}"|git@github.com:Synoraxdev/Sh.CloudPanel.git)
       note 'Using the local checkout (committed source only).'
       run_command git -c safe.directory="$SOURCE_DIR" clone --no-hardlinks --branch "$REPO_BRANCH" -- "$SOURCE_DIR" "$APP_DIR" || return 1;;
     *)
@@ -210,7 +238,7 @@ protect_private_files() {
 }
 configure_environment() {
   ensure_env_file
-  node --input-type=module - "${1:-$APP_DIR}" "$APP_DIR" <<'JS'
+  SHCP_METHOD="$INSTALL_METHOD" SHCP_DOMAIN="$DNS_DOMAIN" SHCP_EMAIL="$DNS_EMAIL" node --input-type=module - "${1:-$APP_DIR}" "$APP_DIR" <<'JS'
 import fs from 'node:fs';
 const [oldRoot,newRoot]=process.argv.slice(2);
 let text=fs.readFileSync('.env','utf8').replaceAll('\r\n','\n');
@@ -220,7 +248,13 @@ if(oldRoot!==newRoot) text=text.replace(/^(DATA_DIR|BACKUP_DIR)=(.*)$/gm,(line,k
   const bare=quote?value.slice(1,-1):value;
   return bare===oldRoot||bare.startsWith(`${oldRoot}/`)?`${key}=${quote}${newRoot}${bare.slice(oldRoot.length)}${quote}`:line;
 });
-for(const [key,value] of Object.entries({PORT:'6969',HOST:'0.0.0.0',NODE_ENV:'production',APP_URL:'',TRUST_PROXY:'false',COOKIE_SECURE:'false',SHCLOUDPANEL_NETWORK_MODE:'direct-v1'})) {
+// Tunneling (direct IP:6969) is the default; a DNS install is applied once and then preserved by Repair.
+const dns=process.env.SHCP_METHOD==='dns'||/^SHCLOUDPANEL_NETWORK_MODE=dns-v1\s*$/m.test(text);
+const existingUrl=(text.match(/^APP_URL=(.*)$/m)||[])[1]||'';
+const values=dns
+  ?{PORT:'6969',HOST:'127.0.0.1',NODE_ENV:'production',APP_URL:process.env.SHCP_DOMAIN?`https://${process.env.SHCP_DOMAIN}`:existingUrl,TRUST_PROXY:'true',COOKIE_SECURE:'true',SHCLOUDPANEL_NETWORK_MODE:'dns-v1',...(process.env.SHCP_EMAIL?{LETSENCRYPT_EMAIL:process.env.SHCP_EMAIL}:{})}
+  :{PORT:'6969',HOST:'0.0.0.0',NODE_ENV:'production',APP_URL:'',TRUST_PROXY:'false',COOKIE_SECURE:'false',SHCLOUDPANEL_NETWORK_MODE:'direct-v1'};
+for(const [key,value] of Object.entries(values)) {
   const expression=new RegExp(`^${key}=.*$`,'gm');
   text=expression.test(text)?text.replace(expression,`${key}=${value}`):`${text.trimEnd()}\n${key}=${value}\n`;
 }
@@ -337,7 +371,7 @@ JS
     note 'Enter owner details below. The password stays out of the log.'; node --env-file=.env src/cli.mjs setup
   fi
 }
-show_addresses() { node --env-file=.env --input-type=module -e "import {serviceUrls} from './src/config.mjs'; console.log(serviceUrls(6969).join('\n'))"; }
+show_addresses() { if dns_mode_enabled; then env_value APP_URL; return 0; fi; node --env-file=.env --input-type=module -e "import {serviceUrls} from './src/config.mjs'; console.log(serviceUrls(6969).join('\n'))"; }
 enable_startup() { pm2 startup systemd -u root --hp /root; pm2 save; }
 mark_installed() { printf 'Setup completed: %s\n' "$(date -u +%FT%TZ)" > "$APP_DIR/.shcloudpanel-installed"; chmod 600 "$APP_DIR/.shcloudpanel-installed"; }
 restart_project() {
@@ -349,25 +383,282 @@ restart_project() {
   pm2 startOrRestart ecosystem.config.cjs --only shcloudpanel --update-env --interpreter "$(command -v node)"
   health; pm2 save; success 'SHCloudPanel restarted on port 6969'
 }
+# ---- DNS install method: your own domain, nginx reverse proxy and a free Let's Encrypt certificate ----
+env_value() {
+  [[ -f .env ]] || return 0
+  sed -n "s/^$1=//p" .env | tail -n 1 | tr -d "\"'\r"
+}
+dns_mode_enabled() { [[ "$(env_value SHCLOUDPANEL_NETWORK_MODE)" == dns-v1 ]]; }
+valid_domain() {
+  local domain=$1 pattern='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+(xn--[a-z0-9-]{1,59}|[a-z]{2,63})$'
+  [[ ${#domain} -le 253 && "$domain" =~ $pattern ]]
+}
+valid_email() {
+  local pattern='^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
+  [[ "$1" =~ $pattern ]]
+}
+choose_install_method() {
+  local choice
+  while true; do
+    heading 'INSTALL METHOD'
+    printf '  %s1%s  Via tunneling   Direct server address on port 6969 (http://SERVER_IP:6969)\n' "$BOLD" "$RESET"
+    printf '  %s2%s  Via DNS         Your own domain with a free SSL certificate (normal method, recommended)\n' "$BOLD" "$RESET"
+    printf '  %s0%s  Back\n\n' "$BOLD" "$RESET"
+    read -r -p '  Select a method [0-2]: ' choice || return 1
+    case "${choice%$'\r'}" in
+      1) INSTALL_METHOD=tunnel; return 0;;
+      2) INSTALL_METHOD=dns; return 0;;
+      0) return 1;;
+      *) note 'Choose 1, 2 or 0.';;
+    esac
+  done
+}
+collect_dns_settings() {
+  local domain email answer
+  heading 'DNS SETUP'
+  note 'SHCloudPanel will be served on your own domain with HTTPS (nginx + free Let'"'"'s Encrypt certificate).'
+  note 'First create an A record for the domain that points to this server (Cloudflare or any DNS provider).'
+  while true; do
+    read -r -p '  Domain for the panel (example: cloud.example.com, 0 to go back): ' domain || return 1
+    domain=${domain%$'\r'}; domain=${domain,,}; domain=${domain#http://}; domain=${domain#https://}; domain=${domain%%/*}
+    [[ "$domain" != 0 ]] || return 1
+    if valid_domain "$domain"; then break; fi
+    note 'Enter a valid domain name such as cloud.example.com (no IP address, port or wildcard).'
+  done
+  while true; do
+    read -r -p '  Email for certificate expiry notices (optional, press Enter to skip): ' email || return 1
+    email=${email%$'\r'}
+    if [[ -z "$email" ]] || valid_email "$email"; then break; fi
+    note 'Enter a valid email address or leave it blank.'
+  done
+  note "Domain  $domain"
+  note "Email   ${email:-not provided}"
+  read -r -p '  Continue with these settings? [Y/n]: ' answer || return 1
+  case "${answer%$'\r'}" in n|N|no|NO|No) return 1;; esac
+  DNS_DOMAIN=$domain; DNS_EMAIL=$email
+}
+check_dns_ports() {
+  command -v ss >/dev/null || return 0
+  local port owner
+  for port in 80 443; do
+    owner=$(ss -H -ltnp "( sport = :$port )" 2>/dev/null || true)
+    if [[ -n "$owner" && "$owner" != *nginx* ]]; then
+      note "$owner"
+      die "Port $port is used by a program other than nginx. Stop it first; the DNS method needs ports 80 and 443."
+    fi
+  done
+}
+check_nginx_domain_free() {
+  [[ -d /etc/nginx ]] || return 0
+  local pattern hit
+  pattern="server_name[^;]*[[:space:]]${DNS_DOMAIN//./\\.}[[:space:];]"
+  hit=$(grep -rIlE -- "$pattern" /etc/nginx 2>/dev/null | grep -vxF -- "$NGINX_CONF" || true)
+  [[ -z "$hit" ]] || die "$DNS_DOMAIN is already configured in nginx ($hit). Use another domain or remove that site first."
+}
+server_public_ip() { curl -4 --fail --silent --max-time 8 https://api.ipify.org 2>/dev/null || true; }
+verify_domain_dns() {
+  local server_ip resolved answer
+  server_ip=$(server_public_ip)
+  while true; do
+    resolved=$(getent ahostsv4 "$DNS_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' - || true)
+    if [[ -z "$resolved" ]]; then
+      note "No DNS record found for $DNS_DOMAIN yet."
+      [[ -z "$server_ip" ]] || note "Create an A record:  $DNS_DOMAIN  ->  $server_ip   (Cloudflare: DNS only or Proxied both work)"
+    elif [[ -n "$server_ip" && " $resolved " == *" $server_ip "* ]]; then
+      success "$DNS_DOMAIN points to this server ($server_ip)"; return 0
+    else
+      note "$DNS_DOMAIN currently resolves to: $resolved"
+      note "This server's public IP is:  ${server_ip:-unknown}"
+      note 'With the Cloudflare proxy (orange cloud) a different address is expected.'
+    fi
+    read -r -p '  Press Enter to check again, type continue to go on anyway, or 0 to cancel: ' answer || return 1
+    case "${answer%$'\r'}" in 0) return 1;; continue|CONTINUE|c) return 0;; esac
+  done
+}
+dns_requirements() {
+  run_command apt-get install -y nginx certbot
+  run_command systemctl enable certbot.timer || true
+}
+has_ipv6() { [[ -s /proc/net/if_inet6 ]]; }
+nginx_http2_directive() {
+  local version
+  version=$(nginx -v 2>&1 | sed -n 's#.*nginx/\([0-9][0-9.]*\).*#\1#p')
+  [[ -n "$version" && "$(printf '%s\n1.25.1\n' "$version" | sort -V | head -n 1)" == 1.25.1 ]]
+}
+render_nginx_conf() {
+  local mode=$1 domain=$2 http2_option='' http2='' http6='' https6=''
+  # IPv6 sockets are only requested when the server has IPv6; otherwise nginx would refuse to start.
+  if nginx_http2_directive; then http2='    http2 on;'; else http2_option=' http2'; fi
+  if has_ipv6; then http6='    listen [::]:80;'; https6="    listen [::]:443 ssl$http2_option;"; fi
+  cat <<CONF
+# Managed by SHCloudPanel (its2jenil_). Repair / migrate rewrites this file.
+server {
+    listen 80;
+$http6
+    server_name $domain;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root $ACME_ROOT;
+        default_type text/plain;
+    }
+
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+CONF
+  [[ "$mode" == full ]] || return 0
+  cat <<CONF
+
+server {
+    listen 443 ssl$http2_option;
+$https6
+$http2
+    server_name $domain;
+
+    ssl_certificate /etc/letsencrypt/live/$domain/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$domain/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:SHCloudPanelSSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # Uploads arrive in parts of at most 80 MB; downloads and uploads are streamed.
+    client_max_body_size 128m;
+
+    location / {
+        proxy_pass http://127.0.0.1:6969;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$remote_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_connect_timeout 30s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+        send_timeout 3600s;
+    }
+}
+CONF
+}
+write_nginx_conf() {
+  local mode=$1 temp
+  install -d -m 755 "$(dirname -- "$NGINX_CONF")" "$ACME_ROOT"
+  temp=$(mktemp "$NGINX_CONF.XXXXXX")
+  render_nginx_conf "$mode" "$DNS_DOMAIN" | sed '/^$/N;/^\n$/D' > "$temp"
+  chmod 644 "$temp"
+  mv -f -- "$temp" "$NGINX_CONF"
+}
+nginx_reload() {
+  run_command nginx -t || return 1
+  if systemctl is-active --quiet nginx; then run_command systemctl reload nginx; else run_command systemctl enable --now nginx; fi
+}
+nginx_loads_site() { nginx -T 2>/dev/null | grep -qF "server_name $DNS_DOMAIN;"; }
+nginx_http_site() {
+  [[ -n "$DNS_DOMAIN" ]] || die 'The domain is not set.'
+  write_nginx_conf http
+  nginx_reload || return 1
+  nginx_loads_site || { printf 'nginx did not load %s. Make sure /etc/nginx/nginx.conf includes /etc/nginx/conf.d/*.conf.\n' "$NGINX_CONF" >&2; return 1; }
+  success "nginx serves http://$DNS_DOMAIN for the certificate check"
+}
+issue_certificate() {
+  local live="/etc/letsencrypt/live/$DNS_DOMAIN/fullchain.pem" old_umask
+  local -a args
+  if [[ -s "$live" ]]; then success "Certificate for $DNS_DOMAIN already exists"; return 0; fi
+  args=(certonly --webroot -w "$ACME_ROOT" -d "$DNS_DOMAIN" --cert-name "$DNS_DOMAIN" --non-interactive --agree-tos --deploy-hook 'systemctl reload nginx')
+  if [[ -n "$DNS_EMAIL" ]]; then args+=(-m "$DNS_EMAIL"); else args+=(--register-unsafely-without-email); fi
+  note "Requesting a free certificate for $DNS_DOMAIN from Let's Encrypt"
+  old_umask=$(umask); umask 022
+  if run_command certbot "${args[@]}"; then umask "$old_umask"; else
+    umask "$old_umask"
+    printf '\nCertificate request failed. Please check that:\n  - the A record of %s points to this server\n  - ports 80 and 443 are open in your firewall / hosting panel\n  - with Cloudflare, nothing blocks http://%s/.well-known/acme-challenge/\nThen choose Repair / migrate installation to try again.\n' "$DNS_DOMAIN" "$DNS_DOMAIN" >&2
+    return 1
+  fi
+  [[ -s "$live" ]] || return 1
+  success "Certificate issued for $DNS_DOMAIN (renews automatically)"
+}
+nginx_https_site() {
+  write_nginx_conf full
+  if ! nginx_reload; then
+    write_nginx_conf http; nginx_reload || true
+    printf 'nginx rejected the HTTPS site. See %s\n' "$LOG_FILE" >&2
+    return 1
+  fi
+  success "HTTPS enabled for $DNS_DOMAIN"
+}
+verify_public_health() {
+  local attempt
+  for attempt in {1..15}; do
+    if curl --noproxy '*' --resolve "$DNS_DOMAIN:443:127.0.0.1" --connect-timeout 3 --max-time 5 --fail --silent "https://$DNS_DOMAIN/api/health" | node -e 'try {const body=JSON.parse(require("node:fs").readFileSync(0,"utf8"));process.exit(body.status==="ok"&&body.version===require("./package.json").version?0:1)} catch {process.exit(1)}'; then
+      success "https://$DNS_DOMAIN is live"; return 0
+    fi
+    sleep 1
+  done
+  printf 'The HTTPS check failed. Run: nginx -t   and   pm2 logs shcloudpanel --lines 50\n' >&2
+  return 1
+}
+load_dns_from_env() {
+  DNS_DOMAIN=$(env_value APP_URL); DNS_DOMAIN=${DNS_DOMAIN#https://}; DNS_DOMAIN=${DNS_DOMAIN%%/*}
+  DNS_EMAIL=$(env_value LETSENCRYPT_EMAIL)
+  valid_domain "$DNS_DOMAIN" || die 'APP_URL in .env is not a valid https domain. Fix it and run Repair again.'
+}
+remove_domain_proxy() {
+  [[ -f "$NGINX_CONF" ]] || return 0
+  if ! grep -q '^# Managed by SHCloudPanel' "$NGINX_CONF"; then note "Left $NGINX_CONF in place: it was not created by SHCloudPanel."; return 0; fi
+  local domain
+  domain=$(sed -n 's/^[[:space:]]*server_name[[:space:]]\+\([^;[:space:]]\+\);.*/\1/p' "$NGINX_CONF" | head -n 1)
+  rm -f -- "$NGINX_CONF"
+  if command -v nginx >/dev/null && nginx -t >/dev/null 2>&1; then systemctl reload nginx >/dev/null 2>&1 || true; fi
+  if [[ "$ACME_ROOT" == */shcloudpanel-acme ]]; then rm -rf --one-file-system -- "$ACME_ROOT"; fi
+  if [[ -n "$domain" ]] && valid_domain "$domain" && command -v certbot >/dev/null && [[ -d "/etc/letsencrypt/live/$domain" ]]; then
+    certbot delete --cert-name "$domain" --non-interactive >/dev/null 2>&1 || note "Could not delete the certificate for $domain; remove it with: certbot delete --cert-name $domain"
+  fi
+  success "Removed the nginx site and certificate${domain:+ for $domain}"
+}
 install_project() {
   require_root
   [[ ! -e "$APP_DIR" && ! -L "$APP_DIR" && ! -e "$LEGACY_DIR" && ! -L "$LEGACY_DIR" ]] || die 'An installation already exists. Choose Repair / migrate; files will be preserved.'
+  if [[ "$INSTALL_METHOD" == dns ]]; then
+    collect_dns_settings || { note 'Installation cancelled. Nothing was changed.'; return 0; }
+    check_dns_ports; check_nginx_domain_free
+    verify_domain_dns || { note 'Installation cancelled. Nothing was changed.'; return 0; }
+    STEP_TOTAL=13
+  fi
   open_log
   step 1 'Install Linux requirements'; linux_requirements
+  if [[ "$INSTALL_METHOD" == dns ]]; then dns_requirements; fi
   step 2 'Install Node.js LTS and global PM2'; install_node; install_pm2
   [[ "$(process_state "$PM2_HOME")" == missing ]] || die 'A SHCloudPanel PM2 entry already exists. Use Repair / migrate for an existing installation.'
   step 3 'Clone SHCloudPanel and enter the project directory'; clone_project
   step 4 'Install locked application requirements'; run_command npm ci --omit=dev --ignore-scripts
   step 5 'Configure private storage'; configure_environment; protect_private_files; private_permissions
   step 6 'Create the owner account'; ensure_owner
-  step 7 'Show service addresses'; show_addresses
-  step 8 'Start SHCloudPanel with PM2'; pm2 start ecosystem.config.cjs --only shcloudpanel --interpreter "$(command -v node)"
-  step 9 'Enable automatic startup after reboot'; enable_startup
-  step 10 'Verify cloud health'; health
+  if [[ "$INSTALL_METHOD" == dns ]]; then
+    step 7 'Start SHCloudPanel with PM2'; pm2 start ecosystem.config.cjs --only shcloudpanel --interpreter "$(command -v node)"
+    step 8 'Enable automatic startup after reboot'; enable_startup
+    step 9 'Verify local cloud health'; health
+    step 10 'Create the nginx site for the domain'; nginx_http_site
+    step 11 'Issue the free SSL certificate'; issue_certificate
+    step 12 'Enable HTTPS and forward to SHCloudPanel'; nginx_https_site
+    step 13 "Verify https://$DNS_DOMAIN"; verify_public_health
+  else
+    step 7 'Show service addresses'; show_addresses
+    step 8 'Start SHCloudPanel with PM2'; pm2 start ecosystem.config.cjs --only shcloudpanel --interpreter "$(command -v node)"
+    step 9 'Enable automatic startup after reboot'; enable_startup
+    step 10 'Verify cloud health'; health
+  fi
   mark_installed
   trap - ERR
   heading 'INSTALLATION COMPLETE'
-  success 'SHCloudPanel is ready on port 6969'
+  if [[ "$INSTALL_METHOD" == dns ]]; then
+    success "SHCloudPanel is ready on https://$DNS_DOMAIN"
+    note 'The certificate renews automatically (certbot timer). Allow ports 80 and 443 in your firewall.'
+    note 'With Cloudflare, use SSL/TLS mode Full (strict).'
+  else
+    success 'SHCloudPanel is ready on port 6969'
+  fi
   note "Directory: $APP_DIR"
   note 'Restart: pm2 restart shcloudpanel --update-env'
   note 'Logs:    pm2 logs shcloudpanel'
@@ -428,6 +719,12 @@ repair_project() {
   node scripts/check.mjs
   ensure_owner
   restart_project; enable_startup
+  if dns_mode_enabled; then
+    heading 'DNS SITE (nginx + certificate)'
+    load_dns_from_env
+    check_dns_ports; check_nginx_domain_free
+    dns_requirements; nginx_http_site; issue_certificate; nginx_https_site; verify_public_health
+  fi
   mark_installed
   trap - ERR
   success 'Repair complete. Owner, files and encryption key preserved.'
@@ -454,6 +751,7 @@ uninstall_project() {
   note 'Unused old SHCloudPanel runtime, service home, manager script and cloud logs are also removed.'
   note 'Copy any backup you need outside this directory first.'
   note 'Global Node.js, PM2 and other PM2 applications remain installed.'
+  if [[ -f "$NGINX_CONF" ]]; then note 'The nginx site and certificate of a DNS install are removed too; nginx and certbot stay installed.'; fi
   read -r -p '  Delete SHCloudPanel and all its stored data? [y/N]: ' confirmation || return 0
   case "${confirmation%$'\r'}" in y|Y|yes|YES|Yes) ;; *) note 'Uninstall cancelled. Nothing removed.'; return 0;; esac
   LEGACY_PM2_SHARED=0
@@ -469,6 +767,7 @@ uninstall_project() {
   elif [[ -S /root/.pm2/rpc.sock ]] || legacy_pm2_exists; then
     die 'Cannot safely remove a running PM2 installation. Install global PM2 or choose Repair first.'
   fi
+  remove_domain_proxy
   cd /root
   remove_managed_path "$APP_DIR"
   remove_managed_path "$LEGACY_DIR"
@@ -497,7 +796,7 @@ main() {
     read -r -p '  Select an option [0-10]: ' choice || return 0
     choice=${choice%$'\r'}
     case "$choice" in
-      1) install_project;;
+      1) if choose_install_method; then install_project; fi;;
       2) require_root; [[ -f "$APP_DIR/update.sh" ]] || die 'Install first, or choose Repair / migrate.'; bash "$APP_DIR/update.sh";;
       3) restart_project;;
       4) require_root; command -v pm2 >/dev/null || die 'Choose Repair to install PM2.'; stop_managed_process "$PM2_HOME"; pm2 save;;

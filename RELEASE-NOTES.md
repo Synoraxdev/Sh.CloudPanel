@@ -1,3 +1,9 @@
+# SHCloudPanel - DNS install method
+
+Choosing **Install** in the manager now asks for a method. **Via tunneling** is the previous setup (direct `http://SERVER_IP:6969`) and is unchanged. **Via DNS** (recommended) serves the cloud on your own domain over HTTPS: it installs nginx and certbot, runs the panel on `127.0.0.1:6969` only, writes a dedicated `/etc/nginx/conf.d/shcloudpanel.conf`, and requests a free Let's Encrypt certificate that renews automatically. No database or other services are added. Other nginx sites are never modified.
+
+The DNS method uses its own network mode (`SHCLOUDPANEL_NETWORK_MODE=dns-v1`) which **Repair** and the **updater** preserve; Repair also rebuilds the nginx site and retries a failed certificate. Uninstall removes the nginx site and certificate that were created. The installation preview (`--dry-run` / option 8) shows both plans.
+
 # SHCloudPanel 1.3.1
 
 Uninstall now uses **Y/N** confirmation and cleans both current and legacy project directories, including empty/partial leftovers without source metadata. Repeated uninstall succeeds, and the menu stays open for a fresh install. Unused old service-home/runtime artifacts, the downloaded manager and cloud-specific logs/PID files are cleaned; other running applications and shared dependencies are protected. Mounted filesystems are refused before removal.

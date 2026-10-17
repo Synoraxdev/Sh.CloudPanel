@@ -54,8 +54,8 @@ SHCloudPanel runs on **Node.js 24+**, **SQLite** and **port 6969**, with **no th
 
 | | |
 | --- | --- |
-| **GitHub** | [`its2jenil_`](https://github.com/its2jenil_) |
-| **Repository** | [`its2jenil_/SHCloudPanel`](https://github.com/its2jenil_/SHCloudPanel) |
+| **GitHub** | [`Synoraxdev`](https://github.com/Synoraxdev) |
+| **Repository** | [`Synoraxdev/Sh.CloudPanel`](https://github.com/Synoraxdev/Sh.CloudPanel) |
 | **Branch** | `main` |
 
 Keep `.env`, `data/`, `backups/` and credentials out of Git (already covered by `.gitignore`).
@@ -67,8 +67,8 @@ Keep `.env`, `data/`, `backups/` and credentials out of Git (already covered by 
 Install Node.js 24 or newer, then:
 
 ```sh
-git clone --branch main https://github.com/its2jenil_/SHCloudPanel.git
-cd SHCloudPanel
+git clone --branch main https://github.com/Synoraxdev/Sh.CloudPanel.git
+cd Sh.CloudPanel
 npm ci
 cp .env.example .env
 npm run setup
@@ -97,6 +97,7 @@ Open **http://localhost:6969**, or **http://SERVER_IPV4:6969** using an IPv4 add
 | `DATA_DIR` | `./data` | SQLite, encrypted blobs and encryption key |
 | `BACKUP_DIR` | `./backups` | Backup output |
 | `REGISTRATION_DOMAIN` | *(blank)* | Optional: limit self-registration to one email domain |
+| `LETSENCRYPT_EMAIL` | *(blank)* | Written by the DNS install method: email for certificate expiry notices (used by the installer only) |
 
 ## VPS installer
 
@@ -105,10 +106,30 @@ Open **http://localhost:6969**, or **http://SERVER_IPV4:6969** using an IPv4 add
 **Supported:** Debian 12+ / Ubuntu 22.04+, x86_64 or ARM64, systemd, root/sudo access and enough disk for members' storage. Run the manager from **outside** the target project directory; it installs Git and clones the project itself.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/its2jenil_/SHCloudPanel/main/install.sh -o /root/shcloudpanel-manager.sh && bash /root/shcloudpanel-manager.sh
+curl -fsSL https://raw.githubusercontent.com/Synoraxdev/Sh.CloudPanel/main/install.sh -o /root/shcloudpanel-manager.sh && bash /root/shcloudpanel-manager.sh
 ```
 
-Choose **1** for a new installation or **9** to repair an existing one. Preview without installing: `bash /root/shcloudpanel-manager.sh --dry-run`.
+Choose **1** for a new installation or **9** to repair an existing one. Choosing **1** asks how the cloud should be reached:
+
+| Method | What you get |
+| --- | --- |
+| **1 - Via tunneling** | Direct server address on port **6969** (`http://SERVER_IP:6969`). Nothing else is installed; this is the original setup. |
+| **2 - Via DNS** *(normal method, recommended)* | Your own domain such as `cloud.example.com` served over **HTTPS** with a free Let's Encrypt certificate. |
+
+### Via DNS (domain + SSL)
+
+1. At your DNS provider (Cloudflare or any other) create an **A record** for the domain that points to the server's public IPv4 address. If you use Cloudflare you can keep the record on *DNS only* or *Proxied*; with the proxy use SSL/TLS mode **Full (strict)**.
+2. Open ports **80** and **443** in your firewall / hosting panel (the installer does not change firewall rules).
+3. Run the installer, choose **1**, then **2 - Via DNS**, and enter the domain and (optionally) an email for certificate notices. The installer waits until the A record is visible before it continues.
+
+The DNS method needs no database and no extra web stack. It installs only **nginx** and **certbot**, and it:
+
+- runs SHCloudPanel on **127.0.0.1:6969** only, so the panel is reachable only through HTTPS (`APP_URL=https://your-domain`, secure cookies, proxy headers trusted);
+- writes one nginx site, `/etc/nginx/conf.d/shcloudpanel.conf`, for your domain only. Other nginx sites on the server (for example another panel) are not touched, and the installer stops if the domain is already used by one of them or if another program owns port 80/443;
+- requests a certificate with `certbot certonly --webroot`; certbot's timer renews it and reloads nginx;
+- allows part uploads up to 128 MB through nginx and streams uploads and downloads (no buffering, one-hour timeouts).
+
+If the certificate step fails (usually DNS or a closed port 80), fix the cause and choose **Repair / migrate (9)**: it rebuilds the nginx site and retries the certificate. Updates (option 2) keep the DNS setup. **Uninstall (10)** also removes the nginx site and the certificate that the installer created; nginx and certbot themselves stay installed. Preview without installing: `bash /root/shcloudpanel-manager.sh --dry-run`.
 
 > Use the **raw.githubusercontent.com** link above. A GitHub `/blob/` link returns an HTML page, and passing it to Bash causes errors like `<!DOCTYPE html>` or `syntax error near unexpected token`. Do not clone a setup checkout into `/root/shcloudpanel` first; that directory is the managed install target.
 
@@ -158,7 +179,7 @@ For an older or interrupted installation, download the latest manager outside th
 
 ```sh
 sudo -i
-curl -fL https://raw.githubusercontent.com/its2jenil_/SHCloudPanel/main/install.sh -o /root/shcloudpanel-manager.sh
+curl -fL https://raw.githubusercontent.com/Synoraxdev/Sh.CloudPanel/main/install.sh -o /root/shcloudpanel-manager.sh
 bash /root/shcloudpanel-manager.sh
 ```
 
@@ -171,7 +192,7 @@ Repair fetches the current source before stopping the cloud, makes a consistent 
 Run the latest manager and choose **10**:
 
 ```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/its2jenil_/SHCloudPanel/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/Synoraxdev/Sh.CloudPanel/main/install.sh)
 ```
 
 Answer **Y** to delete or **N/Enter** to cancel.
@@ -306,4 +327,4 @@ Join the official Discord for help, updates and announcements: **https://dsc.gg/
 
 This panel is based on an open-source project by [JishnuTheGamer](https://github.com/JishnuTheGamer/jtg-cloud) and is released under the **MIT License**. The original copyright notice is kept in [LICENSE](LICENSE).
 
-Maintained by [**its2jenil_**](https://github.com/its2jenil_).
+Maintained by [**its2jenil_**](https://github.com/Synoraxdev).

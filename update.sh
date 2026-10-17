@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 const filename = path.join(process.argv[2], '.env');
 let text = fs.readFileSync(filename, 'utf8').replaceAll('\r\n', '\n');
-if (/^SHCLOUDPANEL_NETWORK_MODE=direct-v1\s*$/m.test(text)) process.exit(0);
+if (/^SHCLOUDPANEL_NETWORK_MODE=(direct-v1|dns-v1)\s*$/m.test(text)) process.exit(0);
 const values = {PORT:'6969',HOST:'0.0.0.0',APP_URL:'',TRUST_PROXY:'false',COOKIE_SECURE:'false',SHCLOUDPANEL_NETWORK_MODE:'direct-v1'};
 for (const [key, value] of Object.entries(values)) {
   const expression = new RegExp(`^${key}=.*$`, 'gm');
@@ -91,7 +91,7 @@ follow_remote_branch
 git merge-base --is-ancestor HEAD "origin/$branch" || { printf 'Update is not a fast-forward. Resolve the branch manually.\n' >&2; exit 1; }
 previous=$(git rev-parse HEAD)
 next=$(git rev-parse "origin/$branch")
-if [[ "$previous" == "$next" ]] && grep -qx 'SHCLOUDPANEL_NETWORK_MODE=direct-v1' .env; then printf 'SHCloudPanel is already up to date. Use installer option 3 to restart, or option 9 to repair.\n'; exit 0; fi
+if [[ "$previous" == "$next" ]] && grep -Eqx 'SHCLOUDPANEL_NETWORK_MODE=(direct-v1|dns-v1)' .env; then printf 'SHCloudPanel is already up to date. Use installer option 3 to restart, or option 9 to repair.\n'; exit 0; fi
 stopped=0
 env_backup=''
 rollback() {
