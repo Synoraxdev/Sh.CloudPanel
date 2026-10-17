@@ -81,7 +81,8 @@ export function openStore(dataDir) {
   }
   const defaults = {
     siteName: 'SHCloudPanel', tagline: 'Your files. Your cloud.', registrationEnabled: true,
-    defaultQuota: 5 * GiB, maxUpload: 0, uploadChunkSize: 20 * MiB, accent: '#0a0a0a', logo: '', favicon: ''
+    defaultQuota: 5 * GiB, maxUpload: 0, uploadChunkSize: 20 * MiB, accent: '#0a0a0a', logo: '', favicon: '',
+    storageMode: 'auto', storageCapacity: 0, storageConfigured: false
   };
   for (const [name, value] of Object.entries(defaults)) db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run(name, JSON.stringify(value));
   if (db.prepare('PRAGMA user_version').get().user_version < 2) {

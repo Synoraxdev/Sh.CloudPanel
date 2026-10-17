@@ -754,3 +754,29 @@ test('DNS install runs its checks first, then nginx and the certificate after th
   assert.deepEqual(order(), ['collect']);
   assert.match(cancelled, /Installation cancelled\. Nothing was changed\./);
 }));
+
+test('installer asks Auto detect or Custom (MB/GB/TB) after the owner exists, once, and never blocks', { skip: !available }, () => fixture((temporary, env) => {
+  const output = shell(['-c', `
+    source ./install.sh
+    APP_DIR="$SHCLOUDPANEL_TEST_ROOT/app"; mkdir -p "$APP_DIR"
+    cp -R ./src "$APP_DIR/src"; cp package.json "$APP_DIR/"; cp .env.example "$APP_DIR/.env"
+    cd "$APP_DIR"
+    printf '%s' '{"displayName":"Owner","username":"owner1","email":"owner@example.invalid","password":"Fixture-password-123"}' | node --env-file=.env src/cli.mjs setup --stdin >/dev/null
+    if node --env-file=.env src/cli.mjs storage --is-configured; then echo 'UNEXPECTED: configured before the prompt'; fi
+    # invalid custom size, then a valid one in MB
+    printf '2\\nabc\\n2\\n3 MB\\n' | configure_storage
+    node --env-file=.env src/cli.mjs storage | grep 'Current setting'
+    # asked only once
+    printf '1\\n' | configure_storage
+    # non-interactive (no input) falls back to Auto on a fresh data directory
+    rm -rf data; printf '%s' '{"displayName":"Owner","username":"owner1","email":"owner@example.invalid","password":"Fixture-password-123"}' | node --env-file=.env src/cli.mjs setup --stdin >/dev/null
+    configure_storage </dev/null
+    node --env-file=.env src/cli.mjs storage | grep 'Current setting'
+  `], env);
+  assert.match(output, /Auto detect\s+Scan this VPS/);
+  assert.match(output, /Try a different size, or choose 1 for Auto detect/);
+  assert.match(output, /Current setting\s+Custom, 3\.00 MB/);
+  assert.match(output, /Storage capacity already configured/);
+  assert.match(output, /Current setting\s+Auto detect/);
+  assert.doesNotMatch(output, /UNEXPECTED/);
+}));

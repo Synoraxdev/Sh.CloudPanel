@@ -227,3 +227,13 @@ a{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
 @media(max-width:700px){.content{padding:18px 14px 40px}.overview{grid-template-columns:repeat(2,1fr)}.ov-cell:nth-child(2){border-left:1px solid var(--line)}.ov-cell:nth-child(odd):not(.ov-wide){border-left:0}.search .kbd{display:none}.search input{padding-right:10px}.topbar-right>.icon-btn{display:none}.page-heading{align-items:flex-start}.page-heading h1{font-size:22px}.dz-cta{display:none}.dropzone small{display:none}}
 
 .discord-link{color:inherit;text-decoration:underline;text-underline-offset:2px;opacity:.85}.discord-link:hover{opacity:1}
+
+/* Admin disk & storage page */
+.stack-bar{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--hover);margin:18px 0 14px}
+.stack-bar>i{display:block;height:100%;min-width:0;transition:width .3s ease}
+.d-cloud{background:var(--ink)}.d-other{background:var(--line-strong)}.d-free{background:var(--hover)}
+.legend{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-wrap:wrap;gap:8px 20px;font-size:12px;color:var(--muted)}
+.legend li{display:flex;align-items:center;gap:7px}.legend b{width:10px;height:10px;border-radius:3px;border:1px solid var(--line-strong);display:inline-block}
+.legend span{color:var(--ink);font-variant-numeric:tabular-nums}
+.admin-table tfoot td{border-top:1px solid var(--line);padding-top:14px}
+@media(max-width:700px){.stack-bar{height:10px}}

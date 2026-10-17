@@ -72,7 +72,7 @@ installation_plan() {
   step 3 'Clone SHCloudPanel and enter the project directory'
   step 4 'Install locked application requirements'; note 'npm ci --omit=dev --ignore-scripts'
   step 5 'Configure private storage'; note 'Root owns and runs the cloud; .env and storage stay private.'
-  step 6 'Create the owner account'; note 'Username, email and a password entered privately.'
+  step 6 'Create the owner account and choose storage capacity'; note 'Owner details entered privately, then Auto detect disk or a Custom size (MB/GB/TB).'
   step 7 'Show service addresses'; note 'Localhost and IPv4 addresses already assigned to the server.'
   step 8 'Start SHCloudPanel with PM2'; note 'pm2 start ecosystem.config.cjs --only shcloudpanel'
   step 9 'Enable automatic startup after reboot'; note 'pm2 startup systemd -u root --hp /root; pm2 save'
@@ -90,7 +90,7 @@ dns_installation_plan() {
   step 3 'Clone SHCloudPanel and enter the project directory'
   step 4 'Install locked application requirements'; note 'npm ci --omit=dev --ignore-scripts'
   step 5 'Configure private storage'; note 'The service listens on 127.0.0.1:6969 only; APP_URL=https://your-domain.'
-  step 6 'Create the owner account'; note 'Username, email and a password entered privately.'
+  step 6 'Create the owner account and choose storage capacity'; note 'Owner details entered privately, then Auto detect disk or a Custom size (MB/GB/TB).'
   step 7 'Start SHCloudPanel with PM2'; note 'pm2 start ecosystem.config.cjs --only shcloudpanel'
   step 8 'Enable automatic startup after reboot'; note 'pm2 startup systemd -u root --hp /root; pm2 save'
   step 9 'Verify local cloud health'
@@ -371,6 +371,32 @@ JS
     note 'Enter owner details below. The password stays out of the log.'; node --env-file=.env src/cli.mjs setup
   fi
 }
+storage_configured() { node --env-file=.env src/cli.mjs storage --is-configured >/dev/null 2>&1; }
+# After the owner exists: choose how much disk the cloud may use (Auto detect or Custom MB/GB/TB).
+configure_storage() {
+  if storage_configured; then success 'Storage capacity already configured'; return 0; fi
+  local choice size
+  heading 'STORAGE CAPACITY'
+  note 'Scanning the server disk...'
+  node --env-file=.env src/cli.mjs storage || true
+  while true; do
+    printf '\n  %s1%s  Auto detect   Scan this VPS and let the cloud use all of its available disk space\n' "$BOLD" "$RESET"
+    printf '  %s2%s  Custom        Set your own capacity in MB, GB or TB\n\n' "$BOLD" "$RESET"
+    if ! read -r -p '  Select [1-2, Enter = 1]: ' choice; then choice=1; fi
+    case "${choice%$'\r'}" in
+      1|'')
+        # Auto detect is also the default behaviour, so a failure here never blocks the installation.
+        node --env-file=.env src/cli.mjs storage --mode auto || note 'Could not save the capacity setting; the cloud stays on Auto detect. Change it later under Disk & storage.'
+        return 0;;
+      2)
+        if ! read -r -p '  Capacity (examples: 500 GB, 1.5 TB, 2048 MB): ' size; then size=''; fi
+        if [[ -z "${size%$'\r'}" ]]; then note 'Enter a size, or choose 1 for Auto detect.'; continue; fi
+        if node --env-file=.env src/cli.mjs storage --mode custom --size "${size%$'\r'}"; then return 0; fi
+        note 'Try a different size, or choose 1 for Auto detect.';;
+      *) note 'Choose 1 or 2.';;
+    esac
+  done
+}
 show_addresses() { if dns_mode_enabled; then env_value APP_URL; return 0; fi; node --env-file=.env --input-type=module -e "import {serviceUrls} from './src/config.mjs'; console.log(serviceUrls(6969).join('\n'))"; }
 enable_startup() { pm2 startup systemd -u root --hp /root; pm2 save; }
 mark_installed() { printf 'Setup completed: %s\n' "$(date -u +%FT%TZ)" > "$APP_DIR/.shcloudpanel-installed"; chmod 600 "$APP_DIR/.shcloudpanel-installed"; }
@@ -634,7 +660,7 @@ install_project() {
   step 3 'Clone SHCloudPanel and enter the project directory'; clone_project
   step 4 'Install locked application requirements'; run_command npm ci --omit=dev --ignore-scripts
   step 5 'Configure private storage'; configure_environment; protect_private_files; private_permissions
-  step 6 'Create the owner account'; ensure_owner
+  step 6 'Create the owner account and choose storage capacity'; ensure_owner; configure_storage
   if [[ "$INSTALL_METHOD" == dns ]]; then
     step 7 'Start SHCloudPanel with PM2'; pm2 start ecosystem.config.cjs --only shcloudpanel --interpreter "$(command -v node)"
     step 8 'Enable automatic startup after reboot'; enable_startup
@@ -717,7 +743,7 @@ repair_project() {
   configure_environment "$existing"; validate_storage; private_permissions
   run_command npm ci --omit=dev --ignore-scripts
   node scripts/check.mjs
-  ensure_owner
+  ensure_owner; configure_storage
   restart_project; enable_startup
   if dns_mode_enabled; then
     heading 'DNS SITE (nginx + certificate)'

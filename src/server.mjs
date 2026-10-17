@@ -11,6 +11,7 @@ import { config, serviceUrls, ROOT, GiB, MiB } from './config.mjs';
 import { openStore, settings, usage, publicUser, audit, transaction } from './database.mjs';
 import { fail, HttpError, token, digest, hashPassword, verifyPassword, identity, entryName, integer, cookies, rateLimiter } from './security.mjs';
 import { acquireLock } from './lock.mjs';
+import { poolRoom, diskReport, setStorage, unitBytes, formatSize } from './capacity.mjs';
 import { createTransfers, reservedUploads, reservedName, entryBlobs, deleteBlobs, downloadRange, downloadBytes } from './transfers.mjs';
 
 const SESSION = 'shcloudpanel_session';
@@ -137,7 +138,7 @@ export async function createApp(overrides = {}) {
       if (req.headers.origin && req.headers.origin !== allowedOrigin) fail(403, 'Cross-origin requests are not allowed.');
       if (req.headers['sec-fetch-site'] === 'cross-site') fail(403, 'Cross-site requests are not allowed.');
     }
-    if (route === '/api/health' && method === 'GET') return json(res, 200, { status: 'ok', version: '1.3.1' });
+    if (route === '/api/health' && method === 'GET') return json(res, 200, { status: 'ok', version: '1.4.0' });
     if (route === '/api/config' && method === 'GET') {
       const s = settings(db);
       return json(res, 200, { siteName: s.siteName, tagline: s.tagline, logo: s.logo, favicon: s.favicon, accent: s.accent, registrationEnabled: s.registrationEnabled, defaultQuota: s.defaultQuota, googleEnabled: false, setupRequired: !db.prepare("SELECT id FROM users WHERE role='owner'").get() });
@@ -234,7 +235,7 @@ export async function createApp(overrides = {}) {
         if (db.prepare('SELECT id FROM entries WHERE user_id=? AND parent_id IS ? AND name=? AND deleted_at IS NULL').get(user.id, parentId, name)) fail(409, 'A file with that name already exists. Rename it first.');
         if (reservedName(db,user.id,parentId,name)) fail(409,'An upload with that name is waiting to complete.');
         const freshUser = db.prepare('SELECT * FROM users WHERE id=?').get(user.id);
-        const available = freshUser.quota - usage(db, user.id) - reservedUploads(db,user.id);
+        const available = Math.min(freshUser.quota - usage(db, user.id) - reservedUploads(db,user.id), poolRoom(db, reservedDisk));
         const fileLimit = settings(db).maxUpload;
         const max = fileLimit > 0 ? Math.min(fileLimit, available) : available;
         const length = Number(req.headers['content-length']);
@@ -247,6 +248,7 @@ export async function createApp(overrides = {}) {
           const currentUser = db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(user.id);
           if (!currentUser) fail(401,'This account is no longer active.');
           if (length + usage(db,user.id) + reservedUploads(db,user.id) > currentUser.quota) fail(413,'Not enough storage. Cancel paused uploads or free some space.');
+          if (length > poolRoom(db, reservedDisk)) fail(507,'The cloud storage capacity is full. Ask the owner to raise it.');
           const limit = settings(db).maxUpload;
           if (limit > 0 && length > limit) fail(413,'This file exceeds the upload limit.');
           if (reservedName(db,user.id,parentId,name)) fail(409,'An upload with that name is waiting to complete.');
@@ -268,6 +270,7 @@ export async function createApp(overrides = {}) {
             parent(user.id, parentId);
             const updated = db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(user.id);
             if (!updated || size + usage(db, user.id) + reservedUploads(db,user.id) > updated.quota) fail(413, 'Storage quota changed. Please retry.');
+            if (size > poolRoom(db, reservedDisk - length)) fail(507, 'The cloud storage capacity is full. Ask the owner to raise it.');
             if (reservedName(db,user.id,parentId,name)) fail(409,'An upload with that name is waiting to complete.');
             const now = Date.now();
             db.prepare("INSERT INTO entries(id,user_id,parent_id,name,kind,size,mime,blob,iv,tag,created_at,updated_at) VALUES (?,?,?,?,'file',?,?,?,?,?,?,?)").run(id, user.id, parentId, name, size, imageType(header) || 'application/octet-stream', id, iv.toString('hex'), cipher.getAuthTag().toString('hex'), now, now);
@@ -372,7 +375,7 @@ export async function createApp(overrides = {}) {
           files: db.prepare("SELECT COUNT(*) AS count FROM entries WHERE kind='file'").get().count,
           used: db.prepare('SELECT COALESCE(SUM(size),0) AS bytes FROM entries').get().bytes,
           diskFree: disk.bavail * disk.bsize, diskTotal: disk.blocks * disk.bsize,
-          settings: settings(db), version: '1.3.1', port: cfg.port });
+          settings: settings(db), version: '1.4.0', port: cfg.port });
       }
       if (route === '/api/admin/users' && method === 'GET') {
         staff(user); return json(res, 200, { users: db.prepare('SELECT * FROM users ORDER BY created_at DESC LIMIT 2000').all().map(u => publicUser(db, u)) });
@@ -449,6 +452,23 @@ export async function createApp(overrides = {}) {
         transaction(db, () => { for (const [name,value] of Object.entries(update)) db.prepare('UPDATE settings SET value=? WHERE key=?').run(JSON.stringify(value), name); });
         audit(db, user.id, 'settings.update', 'site', Object.keys(update).join(', '));
         return json(res, 200, { settings: settings(db) });
+      }
+      if (route === '/api/admin/disk' && method === 'GET') {
+        staff(user); return json(res, 200, await diskReport(db, dataDir));
+      }
+      if (route === '/api/admin/storage' && method === 'PATCH') {
+        owner(user); const input = await body(req);
+        owner(db.prepare('SELECT * FROM users WHERE id=? AND active=1').get(user.id) || {});
+        if (!['auto','custom'].includes(input.mode)) fail(400, 'Storage mode must be auto or custom.');
+        let bytes = 0;
+        if (input.mode === 'custom') {
+          const amount = Number(input.size);
+          if (!Number.isFinite(amount) || amount <= 0) fail(400, 'Enter a capacity greater than zero.');
+          bytes = Math.round(amount * unitBytes(input.unit));
+        }
+        const result = await setStorage(db, dataDir, { mode: input.mode, bytes });
+        audit(db, user.id, 'storage.capacity', 'site', result.mode === 'auto' ? 'auto detect' : formatSize(result.capacity));
+        return json(res, 200, await diskReport(db, dataDir));
       }
       if (route === '/api/admin/audit' && method === 'GET') {
         owner(user); return json(res, 200, { events: db.prepare('SELECT a.*,u.username FROM audit a LEFT JOIN users u ON a.actor=u.id ORDER BY a.id DESC LIMIT 200').all() });

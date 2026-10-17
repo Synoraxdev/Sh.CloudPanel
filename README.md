@@ -5,7 +5,7 @@
 **Your files. Your server.**
 A private, encrypted, responsive cloud storage panel with light, dark and system themes.
 
-![Version](https://img.shields.io/badge/version-1.3.1-4ade80?style=flat-square&labelColor=0a0a0a)
+![Version](https://img.shields.io/badge/version-1.4.0-4ade80?style=flat-square&labelColor=0a0a0a)
 ![Node](https://img.shields.io/badge/node-%E2%89%A5%2024-4ade80?style=flat-square&labelColor=0a0a0a)
 ![Database](https://img.shields.io/badge/database-SQLite-fafaf9?style=flat-square&labelColor=0a0a0a)
 ![Port](https://img.shields.io/badge/port-6969-fafaf9?style=flat-square&labelColor=0a0a0a)
@@ -34,10 +34,26 @@ SHCloudPanel runs on **Node.js 24+**, **SQLite** and **port 6969**, with **no th
 | **Uploads** | Unlimited per-file size by default (within quota and disk space), **20 MB parts** (owner-configurable **1-80 MB**), progress, retries, pause, cancel, resume |
 | **Downloads** | Secure streaming with HTTP byte-range support, including older encrypted files |
 | **Trash** | Restore, permanent deletion, storage accounting that includes trash |
+| **Disk & storage** | Installer asks **Auto detect** (scans the VPS) or **Custom** capacity in **MB / GB / TB**; owner can change it later; administrators get a *Disk & storage* page with server disk scan, allocated vs used space and every account's usage |
 | **Storage** | New members get **5 GB** by default, the owner gets **50 GB**; owner can change registration, quotas, branding, logo, favicon and accent color |
 | **Security** | AES-256-GCM encrypted storage, scrypt passwords, hashed server-side sessions, HttpOnly cookies, origin/CSRF checks, request limits |
 | **Interface** | Light/dark/system themes, animations, mobile layouts, reduced-motion support |
 | **Operations** | Interactive installer, PM2 reboot startup, backups, account recovery, tested updater |
+
+## Disk capacity and the admin Disk page
+
+`// disk-capacity`
+
+After the owner account is created, the installer asks how much disk the cloud may use:
+
+| Option | Behaviour |
+| --- | --- |
+| **1 - Auto detect** | Scans the VPS disk that holds the cloud data and lets the cloud use all of its available space. |
+| **2 - Custom** | You enter a capacity such as `500 GB`, `1.5 TB` or `2048 MB` (1 GB = 1,024 MB, 1 TB = 1,024 GB). It cannot exceed the disk space actually available. |
+
+The owner can switch mode or size later under **Disk & storage**. With a custom capacity, uploads from every account are refused once the cloud total reaches the limit.
+
+**Disk & storage** (sidebar, administrators and owner only) shows the server disk scan (total, cloud files, system/other, free), the capacity, the space **allocated** to accounts, and for every account its allocated space, used space (trash included), usage percentage and remaining space. Terminal equivalents: `node --env-file=.env src/cli.mjs storage` (scan) and `... storage --mode custom --size "500 GB"` / `--mode auto`.
 
 ## Stack
 

@@ -1,3 +1,11 @@
+# SHCloudPanel 1.4.0
+
+**Disk capacity.** After the owner account is created the installer now asks for **Auto detect** (scans the VPS and uses all available disk) or **Custom** capacity in **MB, GB or TB**. The choice is stored in the cloud settings, applies to Install and Repair (asked once; non-interactive runs default to Auto) and can be changed by the owner at any time. A custom capacity is enforced across all accounts for every upload path.
+
+**Disk & storage page.** Administrators and the owner get a new page with the server disk scan (total, cloud files, system/other, free), cloud capacity, the total space allocated to accounts, and a per-account table of allocated, used (including trash), percentage and remaining space, with over-allocation and low-space warnings. Only the owner can change the capacity. New endpoints: `GET /api/admin/disk` (staff) and `PATCH /api/admin/storage` (owner). New CLI command: `src/cli.mjs storage`.
+
+Existing installations keep their behaviour (Auto) after updating; nothing is limited until the owner chooses a custom capacity.
+
 # SHCloudPanel - DNS install method
 
 Choosing **Install** in the manager now asks for a method. **Via tunneling** is the previous setup (direct `http://SERVER_IP:6969`) and is unchanged. **Via DNS** (recommended) serves the cloud on your own domain over HTTPS: it installs nginx and certbot, runs the panel on `127.0.0.1:6969` only, writes a dedicated `/etc/nginx/conf.d/shcloudpanel.conf`, and requests a free Let's Encrypt certificate that renews automatically. No database or other services are added. Other nginx sites are never modified.

@@ -7,6 +7,7 @@ import { config, ROOT, GiB } from './config.mjs';
 import { openStore, audit, settings } from './database.mjs';
 import { hashPassword, identity } from './security.mjs';
 import { acquireLock } from './lock.mjs';
+import { diskReport, setStorage, parseSize, formatSize } from './capacity.mjs';
 
 let muted = false, rl;
 const output = new Writable({ write(chunk, encoding, callback) { if (!muted) process.stdout.write(chunk); callback(); } });
@@ -57,6 +58,29 @@ try {
     store.db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
     audit(store.db,null,'auth.password_reset',user.id,user.username);
     console.log('Password reset. All existing sessions for this account were revoked.');
+  } else if (command === 'storage') {
+    const flag = name => { const at = process.argv.indexOf(name); return at > 0 ? process.argv[at + 1] : undefined; };
+    const mode = flag('--mode');
+    if (mode) {
+      releaseLock = acquireLock(cfg.dataDir);
+      store = openStore(cfg.dataDir);
+      const bytes = mode === 'custom' ? parseSize(flag('--size')) : 0;
+      const result = await setStorage(store.db, cfg.dataDir, { mode, bytes });
+      console.log(result.mode === 'auto' ? '  Storage capacity: Auto detect (uses the free disk space of this server).' : `  Storage capacity: Custom, ${formatSize(result.capacity)}.`);
+    } else {
+      store = openStore(cfg.dataDir);
+      const report = await diskReport(store.db, cfg.dataDir);
+      if (process.argv.includes('--is-configured')) process.exitCode = report.configured ? 0 : 1;
+      else {
+        const row = (label, value) => console.log(`    ${label.padEnd(24)}${value}`);
+        console.log('  Disk scan (the disk that holds the cloud data):');
+        row('Total disk', formatSize(report.disk.total));
+        row('Used (system + files)', formatSize(report.disk.used));
+        row('Free', formatSize(report.disk.free));
+        row('Cloud can use up to', formatSize(report.usable));
+        row('Current setting', report.mode === 'custom' ? `Custom, ${formatSize(report.capacity)}` : 'Auto detect');
+      }
+    }
   } else if (command === 'backup') {
     releaseLock = acquireLock(cfg.dataDir);
     store = openStore(cfg.dataDir);
@@ -68,7 +92,7 @@ try {
     await chmod(path.join(destination,'encryption.key'),0o600);
     console.log(`Backup saved: ${destination}\nKeep this directory private: it contains the encryption key. Restore database, blobs and key together.`);
   } else {
-    console.log('SHCloudPanel server commands (support: https://dsc.gg/hozvikcloud):\n  npm run setup                  Create the first and only owner\n  node --env-file-if-exists=.env src/cli.mjs reset-password\n  node --env-file-if-exists=.env src/cli.mjs backup  (stop PM2 first)\n\nFor automation, setup and reset-password accept JSON through stdin with --stdin. Never pass passwords in command arguments.');
+    console.log('SHCloudPanel server commands (support: https://dsc.gg/hozvikcloud):\n  npm run setup                  Create the first and only owner\n  node --env-file-if-exists=.env src/cli.mjs storage [--mode auto|custom --size 500GB]\n  node --env-file-if-exists=.env src/cli.mjs reset-password\n  node --env-file-if-exists=.env src/cli.mjs backup  (stop PM2 first)\n\nFor automation, setup and reset-password accept JSON through stdin with --stdin. Never pass passwords in command arguments.');
   }
 } catch (error) { console.error(`Error: ${error.message}`); process.exitCode = 1; }
 finally { rl?.close(); store?.db.close(); releaseLock?.(); }

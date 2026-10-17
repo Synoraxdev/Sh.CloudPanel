@@ -7,6 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import { MiB } from './config.mjs';
 import { settings, usage, transaction } from './database.mjs';
 import { fail, HttpError, integer, entryName } from './security.mjs';
+import { poolRoom } from './capacity.mjs';
 
 const TTL = 24 * 60 * 60 * 1000;
 const UUID = /^[a-f0-9-]{36}$/;
@@ -55,6 +56,7 @@ export function createTransfers({ db, key, dataDir, activeUploads, parent, image
     if (!user) fail(401, 'This account is no longer active.');
     parent(upload.user_id, upload.parent_id);
     if (usage(db, upload.user_id) + reservedUploads(db, upload.user_id) > user.quota) fail(413, 'Storage quota changed. Cancel this upload and try again.');
+    if (poolRoom(db, legacyReservation()) < 0) fail(507, 'The cloud storage capacity changed. Cancel this upload or ask the owner to raise it.');
     return user;
   }
   function remainingDisk() {
@@ -144,6 +146,7 @@ export function createTransfers({ db, key, dataDir, activeUploads, parent, image
       if (db.prepare('SELECT COUNT(*) AS count FROM upload_sessions WHERE user_id=? AND state=?').get(userId, 'pending').count >= 20) fail(429, 'Finish or cancel an existing upload before starting another.');
       if (reservedName(db, userId, parentId, name) || db.prepare('SELECT id FROM entries WHERE user_id=? AND parent_id IS ? AND name=? AND deleted_at IS NULL').get(userId, parentId, name)) fail(409, 'A file or upload with that name already exists.');
       if (usage(db, userId) + reservedUploads(db, userId) + size > user.quota) fail(413, 'Not enough storage. Cancel paused uploads, empty trash or ask an administrator for more space.');
+      if (size > poolRoom(db, legacyReservation())) fail(507, 'The cloud storage capacity is full. Ask the owner to raise it.');
       const now = Date.now();
       db.prepare('INSERT INTO upload_sessions(id,user_id,parent_id,name,size,chunk_size,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)').run(id,userId,parentId,name,size,settings(db).uploadChunkSize,now,now+TTL);
       diskChanged();
